@@ -1,0 +1,110 @@
+Create or replace PROCEDURE View_Messages (customerID IN number, msgDate IN date ) IS
+a_id account.aid%type; 
+
+Msg_Body Message.Message_Body%Type;
+Cursor C1 Is Select  message_body, a.aid  From message m, account a
+where m.aid = a.aid and a.cid = customerID and m.message_date >= msgDate ;
+
+BEGIN
+Open C1;
+Loop
+	fetch C1 into msg_body,a_id;
+	IF C1%notfound THEN
+		dbms_output.put_line('No messages to display for specified account and date combination.');
+	ELSE
+		Dbms_Output.Put_Line('Account Id	'||'Message Body');
+	END IF;
+	dbms_output.put_line(a_id||'					'||msg_body);
+	exit when C1%notfound;
+		
+End Loop;
+CLOSE C1;
+
+End;
+----------------------------------------------------
+
+Create Or Replace Procedure Startservice (Houseid In Number,Startdate In Date,Customerid In Number)
+Is
+count_acc Number;
+v_connection_fee rate.connection_fee%Type;
+v_cname customer.cname%type;
+Begin
+SELECT connection_fee INTO v_connection_fee FROM rate WHERE  EXTRACT(MONTH FROM rate_date) = EXTRACT(MONTH FROM Startdate) AND  
+EXTRACT(YEAR FROM rate_date) = EXTRACT(YEAR FROM Startdate)  ;
+
+Select Count(1) Into count_acc From Account a,Customer c 
+WHERE a.cid = c.cid AND a.cid = Customerid AND a.hid = Houseid;
+select cname into v_cname from customer where cid = Customerid;
+/*If account existes*/
+IF count_acc = 1 THEN
+	Update account Set Status = 'Active',account_balance = account_balance + v_connection_fee ,start_date =Startdate Where cid = Customerid AND hid = Houseid ;
+	dbms_output.put_line('Account for '||v_cname||'has been activated on house id '||Houseid );
+/*If account doesnot existes*/	
+ELSIF count_acc = 0 THEN
+	INSERT INTO account VALUES (seq_account.nextVal,Customerid,Houseid,'Active',v_connection_fee,sysdate,NULL);
+	dbms_output.put_line('New account has been created for '||v_cname||'on house '||Houseid||'. Account number is '|| seq_account.nextVal);
+	commit;
+	dbms_output.put_line( 'Account number is '|| (seq_account.nextVal - 2));
+END IF;
+
+EXCEPTION
+when no_data_found then  dbms_output.put_line('Data for the speficied account doesnot exists');  
+when too_many_rows then dbms_output.put_line('Too many rows');
+when others then dbms_output.put_line('Error in data.');
+
+
+
+End;
+
+----------------------------------------------------
+Create Or Replace Procedure endService (accountNo IN number, endDate IN date)
+IS
+
+v_disconnection_fee rate.disconnection_fee%type;
+v_status account.status%type;
+v_end_date account.end_date%type;
+
+BEGIN
+
+IF endDate < sysdate THEN
+dbms_output.put_line('Kindly input a valid date greater than current date.');
+GOTO end_of_procedure;
+END IF;
+
+select UPPER(status),end_date into v_status, v_end_date from account where aid = accountNo;
+
+/*End execution if the service is already ended.*/
+IF (v_status = 'INACTIVE') AND (v_end_date IS NOT NULL) THEN
+dbms_output.put_line('Account '|| accountNo||' is inactive');
+GOTO end_of_procedure;
+END IF;
+
+/*End date is to be updated in the ‘account’ table. */
+UPDATE account SET end_date = endDate WHERE aid = accountNo;
+
+/*Disconnection fee will be added to the balance in account table.*/
+SELECT disconnection_fee
+INTO v_disconnection_fee
+FROM rate
+WHERE  EXTRACT(MONTH FROM rate_date) = EXTRACT(MONTH FROM endDate) AND  
+EXTRACT(YEAR FROM rate_date) = EXTRACT(YEAR FROM endDate)  ;
+
+UPDATE account SET account_balance = account_balance + v_disconnection_fee WHERE aid = accountNo;
+dbms_output.put_line('Service to account '||accountNo||' has been discontinued and disconnection fees of $'||v_disconnection_fee||' has been added to account balance.');
+
+/*Message table will be updated with the record stating the service to the account is discontinued.*/
+INSERT INTO message VALUES (message_id_seq.nextVal,accountNo,'End service request is recieved',systimestamp);
+
+<<end_of_procedure>>
+dbms_output.put_line('');
+
+EXCEPTION
+when no_data_found then  dbms_output.put_line('Data for the speficied account doesnot exists');  
+when too_many_rows then dbms_output.put_line('Too many rows');
+when others then dbms_output.put_line('Error in data.');
+
+
+END;
+
+
+
