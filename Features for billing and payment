@@ -1,0 +1,280 @@
+show errors;
+CREATE OR REPLACE PROCEDURE billGeneration (accountNo in account.aid%type, billMonthYr IN date, electricityUsage in number, gasUsage in number, billGenerationDate in date) IS
+
+total_charge number;
+Total_Days Integer; 
+v_count number := 0; /*Used in display to identify the difference in billing days.*/
+v_status account.status%type;
+v_end_date account.end_date%type;
+v_start_date account.start_date%type;
+last_day_of_month date;
+--v_month number;
+first_day_of_month date;
+v_previous_balance monthly_bill.previous_balance%type;
+billed_days  number;
+v_electricity_rate rate.electricity_rate%type;
+v_gas_rate rate.gas_rate%type;
+v_flat_fee rate.flat_fee%type;
+v_due_date date;
+v_cname customer.cname%type;
+v_street house_address.street%type;
+v_city house_address.city%type;
+v_zip house_address.zip%type;
+v_rid rate.rid%type;
+v_account_balance account.account_balance%type;
+
+BEGIN
+
+SELECT UPPER(status),end_date,start_date,account_balance
+INTO v_status,v_end_date,v_start_date,v_account_balance
+FROM account 
+WHERE aid = accountNo;
+
+/*Check if account exists and service is started for the account.*/ 
+IF (v_status != 'ACTIVE') THEN
+dbms_output.put_line('Service on house with Account No. ' ||accountNo|| ' is not active.');
+GOTO end_of_procedure;
+END IF;
+
+/*Get first and last day of the billed month*/
+SELECT ADD_MONTHS((LAST_DAY(billMonthYr)+1),-1), LAST_DAY(billMonthYr)
+INTO first_day_of_month , last_day_of_month
+FROM DUAL;
+
+
+SELECT trunc(last_day_of_month - first_day_of_month + 1) 
+INTO total_days
+FROM dual;
+
+
+/*Make previous_balance as 0 if account has started service in the  current month*/
+--SELECT EXTRACT(MONTH FROM billMonthYr) into v_month FROM DUAL;
+IF (v_start_date < first_day_of_month) THEN
+
+	/*Consider December month of previous year to compute previous_balance.*/
+	/*IF (v_month = 1) THEN
+		SELECT previous_balance 
+		INTO v_previous_balance 
+		FROM monthly_bill 
+		WHERE aid = accountNo and  EXTRACT(MONTH FROM bill_date) = EXTRACT(MONTH FROM billMonthYr) - 1 AND
+		EXTRACT(YEAR FROM bill_date) = EXTRACT(YEAR FROM billMonthYr)-1 ;
+	ELSE*/
+	/*Consider previous month of the same year to compute previous_balance.*/
+		SELECT previous_balance 
+		INTO v_previous_balance 
+		FROM monthly_bill 
+		WHERE aid = accountNo and  EXTRACT(MONTH FROM bill_date) = EXTRACT(MONTH FROM billMonthYr) AND
+		EXTRACT(YEAR FROM bill_date) = EXTRACT(YEAR FROM billMonthYr) ;
+	/*END IF;	*/
+ELSE
+	v_previous_balance := 0;
+END IF;
+
+
+SELECT electricity_rate ,gas_rate , flat_fee, rid
+INTO v_electricity_rate ,v_gas_rate , v_flat_fee,v_rid
+FROM rate
+WHERE EXTRACT(MONTH FROM rate_date) = EXTRACT(MONTH FROM billMonthYr) AND  
+EXTRACT(YEAR FROM rate_date) = EXTRACT(YEAR FROM billMonthYr)  ;
+
+
+
+/*Normal Case: When service is not started or ended in the current month. If(no end date specified OR end date is not in the current month) AND (start date is not more than first day of month)*/	
+IF ((v_end_date is null OR v_end_date > last_day_of_month) AND (v_start_date <= first_day_of_month)) THEN 
+		total_charge := v_previous_balance + (electricityUsage * v_electricity_rate) + (gasUsage * v_gas_rate) + v_flat_fee;
+		v_count := 1;
+		/*When service is ending in the current month*/
+ELSIF((v_end_date IS NOT NULL) AND (v_end_date <= last_day_of_month)) THEN 
+		/*update status of account ot inactive*/
+		UPDATE account SET status = 'Inactive' WHERE aid = accountNo;
+		IF (v_start_date > first_day_of_month) THEN
+			SELECT trunc(v_end_date - v_start_date)
+			INTO billed_days
+			FROM account 
+			WHERE aid = accountNo;
+			
+		ELSIF (v_start_date <= first_day_of_month) THEN
+		/**/
+			SELECT trunc(v_end_date - first_day_of_month)
+			INTO billed_days
+			FROM dual;
+			
+		END IF;
+			
+		total_charge :=   v_previous_balance + ((billed_days+1) / total_days)  * (electricityUsage * v_electricity_rate + 	gasUsage * v_gas_rate) + v_flat_fee;
+
+ELSIF((v_end_date IS NOT NULL) AND (v_end_date > last_day_of_month)) THEN
+		IF (v_start_date > first_day_of_month) THEN
+			SELECT trunc(last_day_of_month - v_start_date)
+			INTO billed_days
+			FROM dual;
+			
+			
+		END IF;
+		
+		total_charge :=   v_previous_balance + ((billed_days+1) / total_days)  * (electricityUsage * v_electricity_rate + 	gasUsage * v_gas_rate) + v_flat_fee;
+
+ELSIF((v_end_date IS NULL) AND (v_start_date > first_day_of_month)) THEN
+			SELECT trunc(last_day_of_month - v_start_date)
+			INTO billed_days
+			FROM account 
+			WHERE aid = accountNo;	
+			total_charge :=   v_previous_balance + ((billed_days+1) / total_days)  * (electricityUsage * v_electricity_rate + 	gasUsage * v_gas_rate) + v_flat_fee;
+
+END IF;	
+
+
+/*Calculating due date*/
+SELECT billGenerationDate + interval '15' day INTO v_due_date FROM DUAL;
+ 
+ 
+/*update account_balance  in account table as total_charge + previous account balance.*/
+UPDATE account SET account_balance = v_account_balance + total_charge where aid = accountNo;
+
+/*Recording usage information and updating previous balance of account.*/
+
+INSERT INTO monthly_bill values(seq_monthly_bill.nextVal,accountNo,v_rid,billGenerationDate,(billed_days+1) / total_days  * electricityUsage,(billed_days+1) / total_days  * gasUsage,v_account_balance,v_due_date,total_charge);
+
+
+/*Print out information for user*/
+SELECT cname INTO v_cname FROM account a,customer c where a.cid = c.cid AND a.aid = accountNo;
+SELECT street,city,zip INTO v_street,v_city,v_zip FROM account a,house_address h where a.aid = accountNo AND a.hid = h.hid;
+dbms_output.put_line('Billing information:');
+dbms_output.put_line('Customer Name: '|| v_cname);
+dbms_output.put_line('Address: '||v_street ||', '||v_city||', '||v_zip);
+dbms_output.put_line('Account No.: '||accountNo );
+dbms_output.put_line('Previous Balance: '||'$'||v_previous_balance);
+IF (v_count = 1) THEN
+	dbms_output.put_line('Electricity charges for usage of '||electricityUsage ||'kWh is: $'|| (electricityUsage * v_electricity_rate));
+	dbms_output.put_line('Gas charges for usage of '||gasUsage ||'kWh is: $'|| 
+	(gasUsage * v_gas_rate));
+
+ELSE
+
+	dbms_output.put_line('Electricity charges for usage of '||((billed_days+1) / total_days)*electricityUsage ||'kWh is: $'|| 
+	((billed_days+1) / total_days)*(electricityUsage * v_electricity_rate));
+	
+	dbms_output.put_line('Gas charges for usage of '||((billed_days+1) / total_days)*gasUsage ||'kWh is: $'|| 
+	((billed_days+1) / total_days)*(gasUsage * v_gas_rate));
+END IF;
+
+dbms_output.put_line('Total charges for the month is: '|| total_charge); 
+
+
+/*Update message table*/
+INSERT INTO message VALUES(message_id_seq.nextval,accountNo,'Bill is ready.',systimestamp);
+
+<<end_of_procedure>>
+dbms_output.put_line('');
+
+
+EXCEPTION
+when no_data_found then  dbms_output.put_line('Data for the speficied account doesnot exists');  
+when too_many_rows then dbms_output.put_line('Too many rows');
+when others then dbms_output.put_line('Error in data.');
+
+END;
+
+------------------------------------------------------
+
+CREATE OR REPLACE PROCEDURE payBill (accountNo IN payment_history.aid%type, paymentAmt IN payment_history.payment_amount%type) IS
+
+v_account_balance account.account_balance%type;
+v_status account.status%type;
+pending_amt account.account_balance%type;
+v_previous_balance monthly_bill.previous_balance%type;
+
+BEGIN
+
+SELECT UPPER(status),account_balance
+INTO v_status,v_account_balance 
+FROM account 
+WHERE aid = accountNo;
+
+
+	
+/*Check if account exists and service is started for the account. Account which is inactive may need to make last payment.*/  
+IF v_status = 'ACTIVE' THEN
+	GOTO continue_exec;
+ELSIF v_status = 'INACTIVE' AND v_account_balance = 0 THEN
+	dbms_output.put_line('All payments to the account has been done and is Inactive.');
+	GOTO end_of_procedure;
+ELSIF V_Status Is Null Then
+	dbms_output.put_line('Service on house with Account No. ' ||accountNo|| ' has not begun.');
+	GOTO end_of_procedure;
+END IF;
+
+<<continue_exec>>
+/*Procedure doenot allow payment of more than account balance.*/
+If (Paymentamt > V_Account_Balance) THEN
+dbms_output.put_line('Kindly make a payment of less than or equal to account balance '||v_account_balance );
+GOTO end_of_procedure;
+END IF;
+
+INSERT INTO payment_history VALUES (seq_payment_history.nextVal,accountNo,paymentAmt,sysdate);
+UPDATE account SET account_balance = account_balance - paymentAmt WHERE aid = accountNo;
+		
+dbms_output.put_line('Payment of amount '||paymentAmt||' for account No. '|| accountNo|| ' has been done');
+
+	--Display balance amount
+pending_amt := v_account_balance - paymentAmt;
+IF pending_amt > 0 THEN
+	dbms_output.put_line('Pending balance for the account No. '|| accountNo || ' is '|| pending_amt);	
+END IF;
+	-- Message inserted
+INSERT INTO message VALUES(message_id_seq.nextVal,accountNo,'Payment to the account has been done',systimestamp);
+
+<<end_of_procedure>>
+dbms_output.put_line('');
+
+EXCEPTION
+when no_data_found then  dbms_output.put_line('Data for the speficied account doesnot exists');  
+when too_many_rows then dbms_output.put_line('Too many rows');
+when others then dbms_output.put_line('Error in data.');
+
+END;
+
+
+----------------------------------------------
+
+
+
+CREATE OR REPLACE PROCEDURE checkDue IS
+CURSOR chk_due IS SELECT a.aid,a.account_balance,m.bid,m.due_date FROM monthly_bill m,account a WHERE m.due_date < sysdate AND a.account_balance > 0 AND m.aid = a.aid AND m.due_date IN (SELECT max(m.due_date) FROM monthly_bill m,account a WHERE m.due_date < sysdate AND a.account_balance > 0 AND m.aid = a.aid
+group by m.aid) ;
+
+
+
+late_fee account.account_balance%type;
+v_aid account.aid%type;
+v_account_balance account.account_balance%type;
+v_bid monthly_bill.bid%type;
+v_due_date monthly_bill.due_date%type;
+BEGIN
+
+OPEN chk_due;
+LOOP
+FETCH chk_due INTO
+v_aid, v_account_balance,v_bid,v_due_date;
+
+EXIT WHEN chk_due%notfound;
+
+/*5% late charge is added to account balance.*/
+late_fee := (0.05 * v_account_balance);
+UPDATE account SET account_balance = account_balance + late_fee WHERE aid = v_aid;
+dbms_output.put_line('Account id '||v_aid||'has been charges with late fee.'); 
+	
+/*Message table is updated with a new entry.*/
+INSERT INTO message VALUES(message_id_seq.nextVal,v_aid,'Account is past due.',systimestamp);
+commit;
+END LOOP;
+Close Chk_Due;
+
+
+EXCEPTION
+when no_data_found then  dbms_output.put_line('Data for the speficied account doesnot exists');  
+when too_many_rows then dbms_output.put_line('Too many rows');
+when others then dbms_output.put_line('Error');
+
+
+END;
