@@ -22,7 +22,7 @@ From the prompt
 
 4.	The Monthly bill table stores monthly bills for each account. The table stores account number, year and month, electricity usage (in kw), gas usage (in therm), previous balance, total charge.
 5.	The system also stores a rate table that contains the current unit charge for electricity ($ per kw) and gas ($ per cubic feet), and a flat fee. These charges may change over time so you need to store the year and month of these charges. 
-6.	The system has an outage table that stores power outage. It has an outage ID, start and end time, status (active or resolved), zipcode (you can assume that outages in the same zipcode and on the same date is the same outage) and a list of houses affected.  ?????????????????????????????????
+6.	The system has an outage table that stores power outage. It has an outage ID, start and end time, status (active or resolved), zipcode (you can assume that outages in the same zipcode and on the same date is the same outage) and a list of houses affected. 
 7.	Each customer can report a service problem. A ticket will be generated for the problem, with a ticket ID, associated account number, type of problem, problem description, report date, status (active or resolved), service charge, and when the problem is fixed. 
 8.	The system stores a message table for accounts. It stores a message ID, account ID, message body, and message date.
 9.	The system stores payment history for each customer to each account.
