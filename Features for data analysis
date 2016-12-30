@@ -1,0 +1,75 @@
+CREATE OR REPLACE PROCEDURE compCustomer (accountNo IN int, monthOfService IN int, yearOfService IN int) IS
+
+customer_name varchar (50); --Indicates who owns the account. 
+zip_code varchar (30); --Holds the zip code which will be used as an input for calling feature 13. 
+previous_year int; --Holds the previous year where yearOfService is the current year. 
+current_eu number; --Holds the value of electricity usage for the current month and year (as specified in the parameters).
+current_gu number; --Holds the value of gas usage for the current month and year (as specified in the parameters).
+lastyr_eu number; --Holds the value of electricity usage for the same month in the previous year (a.k.a previous_year).
+lastyr_gu number; --Holds the value of gas usage for the same month in the previous year (a.k.a previous_year).
+month_of_service varchar(30); --Translates the monthOfService input parameter monthOfService into a string. 
+
+BEGIN
+previous_year := yearOfService - 1;
+
+SELECT electricity_usage, gas_usage, zip, cname INTO current_eu, current_gu, zip_code, customer_name
+FROM house_address h
+     INNER JOIN account a ON (h.hid = a.hid)
+     INNER JOIN monthly_bill m ON (a.aid = m.aid)
+	 INNER JOIN customer c ON (a.cid = c.cid)
+WHERE a.aid = accountNo
+      AND extract (year FROM bill_date) = yearOfService
+      AND extract (month FROM bill_date) = monthOfService;
+	  
+SELECT electricity_usage, gas_usage INTO lastyr_eu, lastyr_gu
+FROM house_address h
+     INNER JOIN account a ON (h.hid = a.hid)
+     INNER JOIN monthly_bill m ON (a.aid = m.aid)
+WHERE a.aid = accountNo
+      AND extract (year FROM bill_date) = previous_year
+      AND extract (month FROM bill_date) = monthOfService;	  
+
+IF monthOfService = 1 THEN	
+   month_of_service := 'January';
+ELSIF monthOfService = 2 THEN
+   month_of_service := 'February';
+ELSIF monthOfService = 3 THEN
+   month_of_service := 'March';
+ELSIF monthOfService = 4 THEN
+   month_of_service := 'April';
+ELSIF monthOfService = 5 THEN
+   month_of_service := 'May';
+ELSIF monthOfService = 6 THEN
+   month_of_service := 'June';   
+ELSIF monthOfService = 7 THEN
+   month_of_service := 'July';
+ELSIF monthOfService = 8 THEN
+   month_of_service := 'August';   
+ELSIF monthOfService = 9 THEN
+   month_of_service := 'September';  
+ELSIF monthOfService = 10 THEN
+   month_of_service := 'October';     
+ELSIF monthOfService = 11 THEN
+   month_of_service := 'November';     
+ELSIF monthOfService = 12 THEN
+   month_of_service := 'December';  
+ELSE   
+   dbms_output.put_line('Invalid date.');	
+END IF;
+	  
+dbms_output.put_line('Comparative Study for account #: ' || accountNo);	 
+dbms_output.put_line('Account owner: ' || customer_name);	 
+dbms_output.put_line('Electricity usage in ' || month_of_service || ', ' || yearOfService || ' is ' || current_eu || '.');	
+dbms_output.put_line('Gas usage in ' || month_of_service || ', ' || yearOfService || ' is ' || current_gu || '.');	
+					  
+dbms_output.put_line('Electricity usage in ' || month_of_service || ', ' || previous_year || ' is ' || lastyr_eu || '.');	
+dbms_output.put_line('Gas usage in ' || month_of_service || ', ' || previous_year || ' is ' || lastyr_gu || '.');						  
+					  
+usage (zip_code, monthOfService, yearOfService); --Calls feature 13 to complete the rest of the problem. 
+				  
+EXCEPTION
+    WHEN no_data_found THEN
+DBMS_OUTPUT.PUT_LINE('No usage data found.');		  
+END;
+
+EXEC compCustomer (10, 10, 2016);
