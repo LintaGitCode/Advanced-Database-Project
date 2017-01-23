@@ -1,0 +1,51 @@
+-- This procedure takes account id(a_id),problem category(problemCategory),problem description(problemDesc) as inputs and generates a ticket_id(ticket_id).
+Create or replace PROCEDURE report_serviceProblem (a_id in INTEGER, problemCategory in Varchar,problemDesc in varchar,ticket_ID out number) 
+IS
+/* It will loop through the account table to find an account number that matches the input from the user with an active account status */  
+cursor c1 is select aid from account where a_id = aid and status = 'Active';
+account_id account.aid%type;
+BEGIN 
+open c1;
+loop 
+-- Fetch the finding into a local variable
+fetch c1 into account_id;
+exit when c1%NOTFOUND;
+-- Insert statements to message and service_problem table
+Insert Into Service_problem Values (service_problem_seq.nextval,a_id,'in progress',problemCategory, problemDesc,sysdate,null,null);
+/*we will save the generated ticket_id to be displayed to the user later */
+ticket_id := service_problem_seq.currval;
+Insert Into Message Values (message_id_seq.nextval ,a_id,'Issue has  been reported',sysdate);
+end loop;
+close c1;
+end;
+
+
+/* For an account number that exists but does not have an active status/or an account number that does not exist */
+Set Serveroutput on; 
+Declare
+new_ticket number;
+Begin
+
+report_serviceProblem(8,'Heating and Air Conditioning Services','The heater in my house is not working.It is freezing!',new_ticket); 
+/* If the procedure returns a new_ticket,then the account exists and we will generate the corresponding ticket id but if it does not return a new_ticket,it means the account does not exist. */
+if new_ticket > 0 then
+Dbms_output.put_line('The new ticket id is: ' || new_ticket); 
+else
+dbms_output.put_line('This account does not exist'); 
+end if;
+End;
+
+
+-- If account exists and is in an active status
+
+Set Serveroutput on; 
+Declare
+new_ticket number;
+Begin
+report_serviceProblem(3,'Heating and Air Conditioning Services','The heater in my house is not working.It is freezing!',new_ticket); 
+if new_ticket > 0 then
+Dbms_output.put_line('The new ticket id is: ' || new_ticket); 
+else
+dbms_output.put_line('This account does not exist'); 
+end if;
+End;
