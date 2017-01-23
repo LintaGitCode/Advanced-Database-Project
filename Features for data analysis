@@ -73,3 +73,152 @@ DBMS_OUTPUT.PUT_LINE('No usage data found.');
 END;
 
 EXEC compCustomer (10, 10, 2016);
+
+
+___________________________
+
+
+CREATE OR REPLACE PROCEDURE usage (zipCode IN varchar, monthOfService IN int, yearOfService IN int) IS
+
+zip_code varchar (30); --Zip code.
+avg_eu number; --Average electricity usage
+avg_eu_b20 number; --Average electricity usage of the bottom 20 percent. 
+
+avg_gu number; --Average gas usage
+avg_gu_b20 number; --Average gas usage of the bottom 20 percent. 
+
+BEGIN
+SELECT avg(electricity_usage) AS eu_bottom_20percent, zip , total_avg INTO avg_eu_b20, zip_code, avg_eu
+             FROM (
+                   SELECT h.*, a.*, m.*, avg(electricity_usage) OVER (PARTITION BY zip) AS total_avg, 
+--We take everything from the 3 joined tables for reference.
+--We calculate the average electricity_usage by zip.
+                   row_number() OVER (PARTITION BY zip ORDER BY electricity_usage) AS row_num, 
+--We use the Oracle row_number() function to assign the electricity_usage column a row number (after sorting it).
+--These row numbers are assigned after partitioning the zip and then sorting by electricity_usage (from smallest to largest).
+                   greatest(1,round((COUNT(DISTINCT h.hid) OVER (PARTITION BY zip)) * 0.2)) AS bottom_20_cnt
+--We identify the total number of distinct houses by zip and multiply it with .2 to get the bottom 20%.
+--The round function is used to ensure we have 20% (in case we have an odd number of rows). 
+--The greatest function is used to ensure that the bottom_20_cnt is greater than 0.
+--This way, if we have less than 5 houses in a zip, bottom 20% of houses will equal total average for that zip. 
+                   FROM house_address h 
+                        INNER JOIN account a ON (h.hid = a.hid)
+                        INNER JOIN monthly_bill m ON (a.aid = m.aid)
+                   WHERE zip = zipCode --Input Parameter limits results to a specified zip code.
+                          AND extract (year FROM bill_date) = yearOfService --Input Parameter limits the results to a specific year.
+                          AND extract (month FROM bill_date) = monthOfService --Input Parameter limits the results to a specific month.
+                    ) t
+             WHERE t.row_num <= bottom_20_cnt --This WHERE clause limits the AVG(electricity_usage) to bottom 20%. 
+             GROUP BY zip, total_avg
+             ORDER BY zip;	
+dbms_output.put_line('The average electricity usage for zipcode ' || zip_code || ' is ' || avg_eu ||
+                      ' and the average usage of the bottom 20% is ' || avg_eu_b20 || '.');
+
+--The same process is repeated to calculate the averages for gas usage. 				  
+SELECT avg(gas_usage) AS gu_bottom_20percent, zip , total_avg INTO avg_gu_b20, zip_code, avg_gu
+             FROM (
+                   SELECT h.*, a.*, m.*, avg(gas_usage) OVER (PARTITION BY zip) AS total_avg , 
+                   row_number() OVER (PARTITION BY zip ORDER BY gas_usage) AS row_num, 
+                   greatest(1,round((COUNT(DISTINCT h.hid) OVER (PARTITION BY zip)) * 0.2)) AS bottom_20_cnt
+                   FROM house_address h 
+                        INNER JOIN account a ON (h.hid = a.hid)
+                        INNER JOIN monthly_bill m ON (a.aid = m.aid)
+                   WHERE zip = zipCode --Input Parameter limits results to specified zip code.
+                          AND extract (year FROM bill_date) = yearOfService
+                          AND extract (month FROM bill_date) = monthOfService
+                    ) t
+             WHERE t.row_num <= bottom_20_cnt 
+             GROUP BY zip, total_avg
+             ORDER BY zip;	
+dbms_output.put_line('The average gas usage for zipcode ' || zip_code || ' is ' || avg_gu ||
+                      ' and the average usage of the bottom 20% is ' || avg_gu_b20 || '.');
+
+EXCEPTION
+    WHEN no_data_found THEN
+DBMS_OUTPUT.PUT_LINE('No usage data found.');					  
+END;
+
+
+
+__________________________
+
+
+CREATE OR REPLACE PROCEDURE outageStats (startTime IN timestamp, endTime IN timestamp) IS
+
+outage_cnt int; --Holds the number of outages whose start time falls in the time periods specified by the parameters. 
+houses_affected_cnt int; --Holds the number of houses affected by the outage within the time period specified by the parameters. 
+avg_number_houses_affected number; --Holds the average number of houses affected per outage. 
+avg_outage_duration varchar (30); --Holds the average duration of outage. 
+avg_interval_seconds number; --Holds the average number of seconds (for calculation purposes only). 
+zip_code varchar (30); --Holds the zip code with the most number of outages. 
+
+BEGIN
+
+SELECT count(*) INTO outage_cnt
+FROM outage
+WHERE start_time >= startTime AND start_time <= endTime; --Calculates total number of outages.
+dbms_output.put_line('Total number of outages: ' || outage_cnt);
+
+SELECT count(distinct ha.hid) INTO houses_affected_cnt
+FROM outage o
+     INNER JOIN houses_affected ha ON (o.oid = ha.oid)
+WHERE start_time >= startTime AND start_time <= endTime; 
+--Calculates the total number of houses affected by all the outages in the specified time period.
+dbms_output.put_line('Total number of houses affected: ' || houses_affected_cnt);
+
+SELECT cast (avg (num_houses) AS numeric (5,2)) AS avg_num_houses_affected, avg (interval_seconds), NUMTODSINTERVAL (avg (interval_seconds), 'SECOND')
+      INTO avg_number_houses_affected, avg_interval_seconds, avg_outage_duration
+FROM (
+SELECT o.oid, count (ha.hid) AS num_houses, (end_time - start_time) AS outage_duration, (extract(second from end_time - start_time) 
+          + extract(minute from end_time - start_time) * 60 
+          + extract(hour from end_time - start_time) * 60 * 60 
+          + extract(day from end_time - start_time) * 60 * 60 * 24
+            ) AS interval_seconds
+FROM outage o
+     INNER JOIN houses_affected ha ON (o.oid = ha.oid)
+WHERE start_time >= startTime AND start_time <= endTime
+GROUP BY o.oid, start_time, end_time
+) t;
+--We use a nested SQL query to determine the average number of houses affected per outage and the average duration of outage. 
+--The inner query creates an implicit table t which is queried by the outer query. 
+--This is necessary since we cannot use average a count function within a single query. 
+--Thus, we use the count function in the inner query and take those results and average them in the outer query. 
+--For instance, we count the total number of houses in the inner query (labeled as num_houses) and average that count in the outer query.
+--This gives us the average number of houses affected per outage. It must be noted that we used the cast function to limit the average to two decimal points. 
+--To calculate the average duration of outage, we subtracted the end time of the outage from the start time and converted it to seconds using the extract function.
+--We summed up all the seconds in the inner query. We had to GROUP BY using outage id as well as start time and end time.
+--We then averaged the sum of all the seconds. The NUMTODSINTERVAL function was used to convert the number into a timestamp.  
+dbms_output.put_line('Average number of houses affected per outage: ' || avg_number_houses_affected);
+dbms_output.put_line('Average duration of outage: ' || avg_outage_duration);
+
+SELECT outage_zip INTO zip_code 
+FROM (
+SELECT outage_zip, count (*) AS num_outage, row_number () OVER (ORDER BY count(*) DESC) AS row_num
+FROM outage
+WHERE start_time >= startTime AND start_time <= endTime
+GROUP BY outage_zip
+ORDER BY outage_zip) t
+WHERE row_num = 1;
+--Here we determine the zip code with the most number of outages.
+--For starters, we determine the number of outages in each zip code and assign each zip code with a row number in decreasing order.
+--In essence, the zip code with the most number of outages is assigned a row number of 1. 
+--We then use an outer query to call upon the outage zip code where the assigned row number is 1. 
+--This provides us with the zip code that has the most frequent outages. 
+dbms_output.put_line('The zip code with the most number of outages is: ' || zip_code);
+
+/* 
+SELECT * FROM (
+SELECT outage_zip, count (*) AS num_outage
+FROM outage
+GROUP BY outage_zip
+ORDER BY outage_zip) t
+WHERE num_outage = (SELECT max(count(*)) FROM outage GROUP BY outage_zip); 
+*/
+
+EXCEPTION
+    WHEN no_data_found THEN
+DBMS_OUTPUT.PUT_LINE('No outage data found.');	
+END;
+
+EXEC outageStats (timestamp '2002-03-01 09:00:30.75', timestamp '2015-06-09 08:32:22.87');
+
